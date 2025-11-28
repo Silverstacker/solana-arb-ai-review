@@ -3,6 +3,26 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 
+# Maximum safe LTV to prevent division issues near 100%
+MAX_SAFE_LTV = 98.0
+
+
+def calculate_max_leverage(ltv: float) -> float:
+    """
+    Calculate maximum leverage from LTV.
+    Shared utility to avoid code duplication.
+    
+    Formula: max_leverage = 1 / (1 - LTV/100)
+    
+    Safety: Cap LTV at 98% to prevent extreme/infinite leverage.
+    """
+    if ltv <= 0:
+        return 1.0
+    # Cap at safe maximum to prevent division by near-zero
+    safe_ltv = min(ltv, MAX_SAFE_LTV)
+    return 1 / (1 - safe_ltv / 100)
+
+
 @dataclass
 class RateEntry:
     """Normalized rate entry from any platform."""
@@ -27,9 +47,7 @@ class RateEntry:
     @property
     def max_leverage(self) -> float:
         """Maximum leverage based on LTV."""
-        if self.ltv <= 0 or self.ltv >= 100:
-            return 1.0
-        return 1 / (1 - self.ltv / 100)
+        return calculate_max_leverage(self.ltv)
     
     def to_dict(self) -> dict:
         """Convert to dictionary for JSON serialization."""
@@ -48,6 +66,8 @@ class RateEntry:
 
 
 # Known yield-bearing tokens with underlying APY
+# TODO: Fetch dynamically from protocol APIs (DeFiLlama, etc.)
+# These are fallback values when scraping doesn't return underlying APY
 KNOWN_UNDERLYING = {
     'ONyc': 13.35,
     'syrupUSDC': 5.86,
@@ -56,6 +76,8 @@ KNOWN_UNDERLYING = {
 }
 
 # Known LTV values by token
+# TODO: Fetch dynamically from protocol APIs
+# These are fallback values when scraping doesn't return LTV
 KNOWN_LTV = {
     'ONyc': 50,
     'syrupUSDC': 88,
