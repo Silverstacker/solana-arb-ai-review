@@ -2,6 +2,20 @@
 from dataclasses import dataclass, field
 from typing import List, Dict, Optional
 
+from src.models.rate import calculate_max_leverage
+
+
+def make_error_return(error_msg: str) -> Dict:
+    """Create standardized error return with explicit error message."""
+    return {
+        'best_net': 0.0,
+        'min_net': 0.0,
+        'max_net': 0.0,
+        'lev_results': {},
+        'best_lev': 'N/A',
+        'error': error_msg
+    }
+
 
 @dataclass
 class LoopLeg:
@@ -22,9 +36,8 @@ class LoopLeg:
     
     @property
     def max_leverage(self) -> float:
-        if self.ltv <= 0 or self.ltv >= 100:
-            return 1.0
-        return 1 / (1 - self.ltv / 100)
+        """Use shared calculation to avoid duplication."""
+        return calculate_max_leverage(self.ltv)
 
 
 @dataclass
@@ -70,7 +83,7 @@ class Loop:
         base = self.legs[0].supply_apy if self.legs else 0
         return base + (self.underlying_apy or 0)
     
-    def calculate_returns(self, leverage_levels: List[int] = None) -> Dict:
+    def calculate_returns(self, leverage_levels: Optional[List[int]] = None) -> Dict:
         """
         Calculate net APY at various leverage levels.
         
@@ -78,24 +91,26 @@ class Loop:
             Net = (supply * leverage) - (borrow * (leverage - 1))
         
         For cross-platform 2-leg loops:
-            Net = leg1_supply + (leg2_supply * leg1_ltv) - leg1_borrow
+            Net = leg1_supply + (leg2_supply * ltv/100) - (borrow * ltv/100)
+        
+        Returns standardized dict with 'best_net' key.
+        On failure, includes 'error' key with description.
         """
         if leverage_levels is None:
             leverage_levels = [2, 3, 4, 5, 6, 8]
         
-        results = {}
+        if not self.legs:
+            return make_error_return('No legs defined')
         
         if self.is_cross_platform:
-            # Cross-platform calculation
             return self._calc_cross_platform()
         else:
-            # Single-platform loop
             return self._calc_single_platform(leverage_levels)
     
     def _calc_single_platform(self, leverage_levels: List[int]) -> Dict:
         """Calculate returns for single-platform loop."""
         if not self.legs:
-            return {}
+            return make_error_return('No legs defined')
         
         leg = self.legs[0]
         supply = self.total_supply_apy
@@ -123,6 +138,10 @@ class Loop:
                 best_net = net
                 best_lev = f'{lev}x'
         
+        # Ensure we always return valid structure
+        if best_net == float('-inf'):
+            return make_error_return('No valid leverage levels')
+        
         return {
             'lev_results': results,
             'best_lev': best_lev,
@@ -139,18 +158,23 @@ class Loop:
         - Leg 1: Deposit A on Platform1 (earn supply1), Borrow B (pay borrow1)
         - Leg 2: Deposit B on Platform2 (earn supply2 * ltv1)
         
-        Net = supply1 + (supply2 * ltv1/100) - borrow1
+        Net = supply1 + (supply2 * ltv/100) - (borrow * ltv/100)
+        
+        The borrow cost is scaled by LTV because you only borrow LTV% of principal.
         """
         if len(self.legs) < 2:
-            return {}
+            return make_error_return('Insufficient legs for cross-platform (need 2+)')
         
         leg1 = self.legs[0]
         leg2 = self.legs[1]
         
         # Calculate earnings and costs
+        # Earn on full collateral + underlying
         earn_leg1 = leg1.supply_apy + (self.underlying_apy or 0)
+        # Earn on borrowed amount (LTV% of principal)
         earn_leg2 = leg2.supply_apy * (leg1.ltv / 100)
-        cost_leg1 = leg1.borrow_apy
+        # Pay interest on borrowed amount (LTV% of principal)
+        cost_leg1 = leg1.borrow_apy * (leg1.ltv / 100)
         
         total_earn = earn_leg1 + earn_leg2
         total_cost = cost_leg1
@@ -160,6 +184,8 @@ class Loop:
             'total_earn': total_earn,
             'total_cost': total_cost,
             'best_net': net,
+            'min_net': net,
+            'max_net': net,
             'leg1_earn': earn_leg1,
             'leg2_earn': earn_leg2,
             'effective_leverage': 1 + (leg1.ltv / 100)
