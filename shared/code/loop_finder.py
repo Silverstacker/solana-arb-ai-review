@@ -14,7 +14,7 @@ def find_single_platform_loops(rates: List[RateEntry]) -> List[Loop]:
     - Collateral token (can_collateral=True, has LTV)
     - Borrow token (can_borrow=True, has borrow_apy)
     - Same platform AND market
-    - Collateral != Borrow (unless collateral has underlying yield)
+    - Collateral != Borrow (Kamino does NOT allow borrowing same asset as collateral)
     """
     loops = []
     
@@ -35,8 +35,9 @@ def find_single_platform_loops(rates: List[RateEntry]) -> List[Loop]:
         # Find all valid collateral/borrow combinations
         for c in collaterals:
             for b in borrowables:
-                # Skip same token unless it has underlying yield
-                if c.token == b.token and not c.underlying_apy:
+                # CRITICAL: Cannot borrow the same token you deposited as collateral
+                # This is a Kamino rule - same-asset borrowing is not allowed
+                if c.token == b.token:
                     continue
                 
                 loop = create_loop(c, b)
